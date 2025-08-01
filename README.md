@@ -29,3 +29,6 @@ Unanswered questions:
 - Am I doing something wrong or missing something due to which ?connect_timeout=10 did not solve the problem?
 
 My tech stack is - Nextjs 15 app router hosted on Vercel, Prisma ORM, Neon database
+
+**This post was originally a tweet. You can reply there if you have suggestions:**
+https://x.com/hipreetam93/status/1951152075410219056
