@@ -1,81 +1,31 @@
 # Neon database P1001 connection timeout issue using Prisma ORM and Nextjs
 A fix for Neon database P1001 connection timeout error when using Prisma ORM in a Nextjs app deployed on Vercel.
 
-// lib/prisma.ts  – lazy Prisma client + *one* retry on connection errors
-import { Prisma, PrismaClient } from '@/lib/generated/prisma';
+### Find the code here:
+https://github.com/preetamnath/neon-prisma-p1001-connection-timeout-nextjs/blob/b2014bcb306c4bdca9e83acf4666eb50eeafd76e/lib/prisma.ts
 
-/* Retry only these transient codes that show up when Neon is still waking */
-// Prisma error codes documentation - https://www.prisma.io/docs/orm/reference/error-reference#error-codes
-const RETRYABLE_CODES = [
-  // --- Connection Errors ---
-  'P1001', // Can't reach database server (e.g., DB is starting up)
-  'P1002', // The server timed out.
-  'P1008', // Operations timed out.
-  'P1017', // Server has closed the connection.
+## Problem description:
 
-  // --- Connection Pool and Transaction Errors ---
-  'P2024', // Timed out fetching a new connection from the pool.
-] as const;
+Neon postgres has a cold start problem.
 
-const RETRY_DELAY_MS = 2_000;   // 2 s pause before the single retry
+It's not a surprise, given that they are a "serverless" pg platform.
 
-function isRetryable(e: unknown): boolean {
-  return (
-    (e instanceof Prisma.PrismaClientKnownRequestError &&
-      // Cast to readonly string[] for better TypeScript compatibility with includes()
-      (RETRYABLE_CODES as readonly string[]).includes(e.code as string)) ||
-    (e instanceof Prisma.PrismaClientInitializationError &&
-      // Cast to readonly string[] for better TypeScript compatibility with includes()
-      (RETRYABLE_CODES as readonly string[]).includes((e.errorCode ?? '') as string))
-  );
-}
+But the cold start issue is quite annoying. It happens when compute is suspended, and a user of the app triggers a db query.
 
-/* ─── Prisma client singleton ────────────────────────────────────── */
-// Create a type-safe wrapper around globalThis to store PrismaClient instance
-const globalForPrisma = globalThis as { prisma?: PrismaClient };
-// Either use existing Prisma instance or create new one using nullish coalescing
-const base = globalForPrisma.prisma ?? new PrismaClient();
+I use Prisma's ORM. And the way to specify to Prisma client to wait longer before connection timeout is to add this parameter to your "DATABSE_URL" string
 
-/* ---- tiny query-level extension: one retry, no eager $connect ----- */
-const prisma = base.$extends(
-  Prisma.defineExtension({
-    name: 'one-shot-connection-retry',
-    query: {
-      $allModels: {
-        async $allOperations<R, A>({
-          operation,
-          args,
-          query,
-        }: {
-          operation: string;
-          args: A;
-          query: (a: A) => Promise<R>;
-        }): Promise<R> {
-          try {
-            // First attempt → Cold DB timeout
-            return await query(args);
-          } catch (err) {
-            // non-connection error → bubble up
-            if (!isRetryable(err)) throw err;
+?connect_timeout=5
 
-            console.warn(
-              `[Prisma] ${operation} hit ${(
-                err as { code?: string; errorCode?: string }
-              ).code ?? 'no error code, assuming: P1001'} – retrying once in ${RETRY_DELAY_MS / 1_000}s`
-            );
-            // Wait 2s → Neon warms up
-            await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
-            // Second attempt (single retry) → Warm DB succeeds
-            return await query(args);
-          }
-        },
-      },
-    },
-  })
-) as PrismaClient;
+Neon's documentation says their db is back usually within 5 seconds. So increasing ?connect_timeout=10 should work, right?
 
-// Save prisma instance to our wrapper in development only
-// This prevents multiple instances during Next.js hot reloading
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
+It did not solve the problem for me. I would still get the same error (error text from Neon's documentation):
 
-export default prisma;
+Error: P1001: Can't reach database server at `database_url`:`5432`Please make sure your database server is running at `database_url`:`5432`.
+
+Finally, I had to write this wrapper in my lib/prisma.ts client initialization code to handle retries. This seems to be working (for now).
+
+Unanswered questions:
+- Even a single retry on the default 5 second connect_timeout works, which is strange because if that's true, why did connect_timeout 10 not work?
+- Am I doing something wrong or missing something due to which ?connect_timeout=10 did not solve the problem?
+
+My tech stack is - Nextjs 15 app router hosted on Vercel, Prisma ORM, Neon database
