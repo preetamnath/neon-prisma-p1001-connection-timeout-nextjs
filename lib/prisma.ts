@@ -1,4 +1,13 @@
 // lib/prisma.ts  – lazy Prisma client + *one* retry on connection errors
+
+// This file is used to create a singleton instance of the PrismaClient
+// This is a best practice to avoid multiple instances of the client in development
+// and to ensure that the client is properly disposed of when the app shuts down
+// AuthJs Prisma adapter documentation: https://authjs.dev/getting-started/adapters/prisma#configuration
+// Prisma ORM documentation to setup Prisma Client: https://www.prisma.io/docs/guides/nextjs#25-set-up-prisma-client 
+
+// Import PrismaClient constructor from Prisma's client library
+// After Prisma v6 it is no longer in node modules and instead in a /generated/ folder
 import { Prisma, PrismaClient } from '@/lib/generated/prisma';
 
 /* Retry only these transient codes that show up when Neon is still waking */
@@ -14,7 +23,7 @@ const RETRYABLE_CODES = [
   'P2024', // Timed out fetching a new connection from the pool.
 ] as const;
 
-const RETRY_DELAY_MS = 2_000;   // 2 s pause before the single retry
+const RETRY_DELAY_MS = 1000;   // 1 second pause before the single retry
 
 function isRetryable(e: unknown): boolean {
   return (
@@ -60,7 +69,7 @@ const prisma = base.$extends(
                 err as { code?: string; errorCode?: string }
               ).code ?? 'no error code, assuming: P1001'} – retrying once in ${RETRY_DELAY_MS / 1_000}s`
             );
-            // Wait 2s → Neon warms up
+            // Wait 1 second → Neon warms up
             await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
             // Second attempt (single retry) → Warm DB succeeds
             return await query(args);
